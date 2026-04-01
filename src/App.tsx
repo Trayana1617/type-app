@@ -81,12 +81,11 @@ export default function TypographyApp() {
         // Inject physical font files into browser memory so they render
         formattedData.forEach(async (font) => {
           if (font.stylesList && font.stylesList.length > 0) {
-            // Load EACH style and weight combination into the browser
+            // Load EACH style and weight combination into the browser under the same cssFamily
             font.stylesList.forEach(async (styleObj) => {
               if (styleObj.url) {
                 try {
-                  const familyToUse = styleObj.cssFamily || font.cssFamily;
-                  const fontFace = new FontFace(familyToUse, `url(${styleObj.url})`, {
+                  const fontFace = new FontFace(font.cssFamily, `url(${styleObj.url})`, {
                     weight: styleObj.weight?.toString() || '400',
                     style: styleObj.style || 'normal'
                   });
@@ -264,7 +263,7 @@ function IndexView({ fonts, isLoading, searchQuery, setSearchQuery, activeCatego
             className="group grid grid-cols-1 md:grid-cols-12 gap-4 items-center p-6 bg-[#E6E6E6] hover:bg-white rounded-2xl cursor-pointer transition-colors w-full text-left"
           >
             <div className="md:col-span-4 flex flex-col items-start justify-center text-left">
-              <span className="text-2xl sm:text-3xl mb-1 text-[#252525]" style={{ fontFamily: font.cssFamily }}>{font.name}</span>
+              <span className="text-2xl sm:text-3xl mb-1 text-[#252525]" style={{ fontFamily: font.cssFamily, fontWeight: 400 }}>{font.name}</span>
               <span className="text-xs text-[#6C6C6C] uppercase tracking-widest">{font.foundry}</span>
             </div>
             <div className="md:col-span-6 flex items-center justify-start text-left text-sm text-[#6C6C6C] truncate transition-colors group-hover:text-[#6C6C6C]" style={{ fontFamily: font.cssFamily, fontSize: '1.25rem' }}>
@@ -360,10 +359,8 @@ function PlaygroundView({ font, onBack, onDelete }) {
     }
   };
 
-  // Determine what exactly to apply to the textarea
-  const appliedFontFamily = useDropdown 
-    ? (font.stylesList[activeStyleIndex]?.cssFamily || font.cssFamily)
-    : (font.stylesList?.[0]?.cssFamily || font.cssFamily);
+  // The entire family now perfectly shares one single cssFamily name
+  const appliedFontFamily = font.cssFamily;
     
   const appliedFontWeight = useDropdown 
     ? (font.stylesList[activeStyleIndex]?.weight || 400)
@@ -438,24 +435,10 @@ function PlaygroundView({ font, onBack, onDelete }) {
       <div className="flex flex-1 flex-col lg:flex-row overflow-hidden w-full text-left">
         <div className={`flex-none w-full lg:w-80 border-r border-[#E6E6E6] bg-[#EFEFEF] overflow-y-auto flex flex-col items-start text-left ${isFullscreen ? 'hidden' : 'block'}`}>
           <div className="p-8 border-b border-[#E6E6E6] w-full flex flex-col items-start text-left">
-            <h2 className="text-4xl font-semibold tracking-tight mb-2 leading-tight text-[#252525]" style={{ fontFamily: font.cssFamily }}>{font.name}</h2>
+            <h2 className="text-4xl font-semibold tracking-tight mb-2 leading-tight text-[#252525]" style={{ fontFamily: font.cssFamily, fontWeight: 400 }}>{font.name}</h2>
             <div className="text-sm text-[#6C6C6C] space-y-1 mb-6">
               <p>By {font.foundry}</p>
               <p className="uppercase tracking-widest text-xs mt-4">Category: {font.category}</p>
-              
-              {/* Little Black Tags / Style Pills */}
-              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-[#E6E6E6]/60">
-                {font.variable && (
-                  <span className="px-2.5 py-1 bg-[#252525] text-white rounded text-[10px] font-medium uppercase tracking-widest shadow-sm">
-                    Variable
-                  </span>
-                )}
-                {font.stylesList?.map((s, i) => (
-                  <span key={i} className="px-2.5 py-1 bg-white border border-[#E6E6E6] text-[#6C6C6C] rounded text-[10px] font-medium uppercase tracking-widest shadow-sm hover:text-[#252525] hover:border-[#252525]/30 cursor-default transition-colors">
-                    {s.name}
-                  </span>
-                ))}
-              </div>
             </div>
           </div>
           <div className="p-8 flex flex-col gap-8 flex-1 w-full text-left">
@@ -567,43 +550,61 @@ function UploadPanel({ onClose, onSave }) {
         // Get Raw Family Name
         let rawFamilyName = parsedFont?.names?.fontFamily?.en || parsedFont?.names?.preferredFamily?.en || file.name.split('.')[0];
         
-        // Strip out width/stretch modifiers from the family name to ensure grouping
+        // Aggressively strip out width/stretch/weight modifiers from the family name to ensure flawless grouping
         let familyName = rawFamilyName
-            .replace(/\b(Condensed|Cond|Extended|Ext|Wide|Narrow|Compressed|SemiCondensed|SemiCond)\b/gi, '')
+            .replace(/[-_\s]?(Condensed|Cond|Extended|Extd|Ext|Wide|Narrow|Normal|Compressed|SemiCondensed|SemiCond)/gi, '')
             .replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '')
             .replace(/([a-z])([A-Z])/g, '$1 $2').trim();
             
-        if (!familyName) familyName = "Custom Font";
+        // Fallback if the strip removes literally everything (e.g. font was just named "Normal.ttf")
+        if (!familyName) {
+            familyName = file.name.split('.')[0].replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique|Condensed|Cond|Extended|Extd|Ext|Wide|Narrow|Normal|Compressed|SemiCondensed|SemiCond).*$/i, '').trim() || "Custom Font";
+        }
 
         // Get True Subfamily / Style Name (e.g. "Bold", "Regular")
         let rawSubfamily = parsedFont?.names?.fontSubfamily?.en || parsedFont?.names?.preferredSubfamily?.en || 'Regular';
-        
-        // Recover stretch descriptors from the raw family name if they were present
-        let stretchMatch = rawFamilyName.match(/\b(Condensed|Cond|Extended|Ext|Wide|Narrow|Compressed|SemiCondensed|SemiCond)\b/i);
         let weightName = rawSubfamily;
-        if (stretchMatch && !weightName.toLowerCase().includes(stretchMatch[0].toLowerCase())) {
-            weightName = `${stretchMatch[0]} ${weightName}`;
+        
+        // Recover stretch descriptors from the filename directly to ensure accuracy
+        let stretchMatch = file.name.match(/(Condensed|Cond|Extended|Extd|Ext|Wide|Narrow|Normal|Compressed|SemiCondensed|SemiCond)/i);
+        
+        if (stretchMatch) {
+            let stretchStr = stretchMatch[0];
+            // Normalize the stretch naming conventions
+            if (/^Cond$/i.test(stretchStr)) stretchStr = 'Condensed';
+            else if (/^Extd$|^Ext$/i.test(stretchStr)) stretchStr = 'Extended';
+            else stretchStr = stretchStr.charAt(0).toUpperCase() + stretchStr.slice(1).toLowerCase();
+
+            // Append it to the style name if it's missing (e.g., "Bold" -> "Extended Bold")
+            if (stretchStr !== 'Normal' && !weightName.toLowerCase().includes(stretchStr.toLowerCase())) {
+                weightName = `${stretchStr} ${weightName}`;
+            } else if (stretchStr === 'Normal' && weightName.toLowerCase() === 'regular') {
+                weightName = 'Normal';
+            }
         }
         
-        // Clean up duplicate names (e.g., "Condensed Condensed Bold")
+        // Clean up duplicate names seamlessly (e.g., "Condensed Condensed Bold" -> "Condensed Bold")
         let styleWords = weightName.split(' ');
-        weightName = [...new Set(styleWords)].join(' ');
+        const uniqueWords = [];
+        styleWords.forEach(word => {
+            if (!uniqueWords.find(w => w.toLowerCase() === word.toLowerCase())) {
+                uniqueWords.push(word);
+            }
+        });
+        weightName = uniqueWords.join(' ');
         
-        // Extract technical numeric weight
+        // Extract technical numeric weight & style
         let weight = parsedFont?.tables?.os2?.usWeightClass || 400;
-        
-        // Extract technical italic style
         let style = /italic|oblique/i.test(weightName) ? 'italic' : 'normal';
 
         // Extract True Foundry
         let foundry = parsedFont?.names?.manufacturer?.en || parsedFont?.names?.designer?.en || 'Independent Foundry';
 
+        // Use ONE universal CSS Family name per typeface for perfect grouping and previewing
         const cssFamily = `Custom_${familyName.replace(/[^a-zA-Z0-9]/g, '_')}`;
-        // Create a totally unique CSS font-family for THIS specific file so browser doesn't mix them up
-        const styleCssFamily = `${cssFamily}_${weightName.replace(/[^a-zA-Z0-9]/g, '')}`;
 
-        // Preview locally before upload
-        const fontFace = new FontFace(styleCssFamily, buffer, { weight: weight.toString(), style });
+        // Preview locally before upload using the shared cssFamily
+        const fontFace = new FontFace(cssFamily, buffer, { weight: weight.toString(), style });
         await fontFace.load();
         document.fonts.add(fontFace);
 
@@ -624,9 +625,9 @@ function UploadPanel({ onClose, onSave }) {
         
         const entry = familyMap.get(familyName);
         
-        // Prevent exact duplicates and add file to the stylesList for later upload mapping
+        // Prevent exact duplicates and add file to the stylesList
         if (!entry.stylesList.some(s => s.name === weightName)) {
-           entry.stylesList.push({ weight, style, name: weightName, file, cssFamily: styleCssFamily });
+           entry.stylesList.push({ weight, style, name: weightName, file });
         }
         entry.styles = entry.stylesList.length;
 
@@ -672,7 +673,6 @@ function UploadPanel({ onClose, onSave }) {
             weight: styleObj.weight,
             style: styleObj.style,
             name: styleObj.name,
-            cssFamily: styleObj.cssFamily,
             url: publicUrlData.publicUrl
           });
         }
