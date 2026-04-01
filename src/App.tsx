@@ -85,9 +85,10 @@ export default function TypographyApp() {
             font.stylesList.forEach(async (styleObj) => {
               if (styleObj.url) {
                 try {
-                  const fontFace = new FontFace(font.cssFamily, `url(${styleObj.url})`, {
-                    weight: styleObj.weight.toString(),
-                    style: styleObj.style
+                  const familyToUse = styleObj.cssFamily || font.cssFamily;
+                  const fontFace = new FontFace(familyToUse, `url(${styleObj.url})`, {
+                    weight: styleObj.weight?.toString() || '400',
+                    style: styleObj.style || 'normal'
                   });
                   await fontFace.load();
                   document.fonts.add(fontFace);
@@ -299,8 +300,12 @@ function IndexView({ fonts, isLoading, searchQuery, setSearchQuery, activeCatego
 function PlaygroundView({ font, onBack, onDelete }) {
   const [text, setText] = useState('The quick brown fox jumps over the lazy dog.\n\nPack my box with five dozen liquor jugs. How vexingly quick daft zebras jump! Sphinx of black quartz, judge my vow.');
   const [fontSize, setFontSize] = useState(48);
-  const [fontWeight, setFontWeight] = useState(400);
-  const [fontStyle, setFontStyle] = useState('normal');
+  
+  // Style Selection State
+  const [activeStyleIndex, setActiveStyleIndex] = useState(0);
+  const [fontWeight, setFontWeight] = useState(400); // Fallback for sliders
+  const [fontStyle, setFontStyle] = useState('normal'); // Fallback for sliders
+  
   const [lineHeight, setLineHeight] = useState(1.2);
   const [letterSpacing, setLetterSpacing] = useState(0);
   const [textAlign, setTextAlign] = useState('left');
@@ -309,30 +314,64 @@ function PlaygroundView({ font, onBack, onDelete }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // If there's more than one specific style mapped, use the dropdown selector
+  const useDropdown = font.stylesList && font.stylesList.length > 1;
+
   useEffect(() => {
-    if (font.stylesList && font.stylesList.length > 0) {
-      const defaultStyle = font.stylesList.find(s => s.weight === 400 && s.style === 'normal') || font.stylesList[0];
-      setFontWeight(defaultStyle.weight);
-      setFontStyle(defaultStyle.style);
-    } else {
-      setFontWeight(400);
-      setFontStyle('normal');
+    setActiveStyleIndex(0);
+    setFontWeight(400);
+    setFontStyle('normal');
+  }, [font]);
+
+  const hasItalicCounterpart = useMemo(() => {
+    if (!useDropdown) return true; // Standard font behavior fallback
+    const currentStyle = font.stylesList[activeStyleIndex];
+    if (!currentStyle) return false;
+    
+    const isItalic = /italic|oblique/i.test(currentStyle.name);
+    const baseName = currentStyle.name.replace(/italic|oblique/ig, '').trim();
+    
+    return font.stylesList.some(s => 
+        s.weight === currentStyle.weight && 
+        (/italic|oblique/i.test(s.name) === !isItalic) &&
+        s.name.replace(/italic|oblique/ig, '').trim() === baseName
+    );
+  }, [useDropdown, font.stylesList, activeStyleIndex]);
+
+  const handleItalicToggle = () => {
+    if (!useDropdown) {
+        setFontStyle(fontStyle === 'italic' ? 'normal' : 'italic');
+        return;
     }
-  }, [font]);
+    const currentStyle = font.stylesList[activeStyleIndex];
+    if (!currentStyle) return;
 
-  const availableWeights = useMemo(() => {
-    if (!font.stylesList || font.variable) return null;
-    return [...new Set(font.stylesList.map(s => s.weight))].sort((a,b) => a - b);
-  }, [font]);
+    const isItalic = /italic|oblique/i.test(currentStyle.name);
+    const baseName = currentStyle.name.replace(/italic|oblique/ig, '').trim();
+    
+    const counterpartIdx = font.stylesList.findIndex(s => 
+        s.weight === currentStyle.weight && 
+        (/italic|oblique/i.test(s.name) === !isItalic) &&
+        s.name.replace(/italic|oblique/ig, '').trim() === baseName
+    );
+    
+    if (counterpartIdx !== -1) {
+        setActiveStyleIndex(counterpartIdx);
+    }
+  };
 
-  const hasItalicForCurrentWeight = useMemo(() => {
-    if (!font.stylesList) return true; 
-    return font.stylesList.some(s => s.weight === fontWeight && s.style === 'italic');
-  }, [font, fontWeight]);
+  // Determine what exactly to apply to the textarea
+  const appliedFontFamily = useDropdown 
+    ? (font.stylesList[activeStyleIndex]?.cssFamily || font.cssFamily)
+    : (font.stylesList?.[0]?.cssFamily || font.cssFamily);
+    
+  const appliedFontWeight = useDropdown 
+    ? (font.stylesList[activeStyleIndex]?.weight || 400)
+    : fontWeight;
 
-  useEffect(() => {
-    if (font.stylesList && fontStyle === 'italic' && !hasItalicForCurrentWeight) setFontStyle('normal');
-  }, [fontWeight, font.stylesList, hasItalicForCurrentWeight, fontStyle]);
+  const appliedFontStyle = useDropdown
+    ? (font.stylesList[activeStyleIndex]?.style || 'normal')
+    : fontStyle;
 
   // Handle downloading all font files associated with this font
   const handleDownload = async () => {
@@ -403,29 +442,43 @@ function PlaygroundView({ font, onBack, onDelete }) {
             <div className="text-sm text-[#6C6C6C] space-y-1 mb-6">
               <p>By {font.foundry}</p>
               <p className="uppercase tracking-widest text-xs mt-4">Category: {font.category}</p>
+              
+              {/* Little Black Tags / Style Pills */}
+              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-[#E6E6E6]/60">
+                {font.variable && (
+                  <span className="px-2.5 py-1 bg-[#252525] text-white rounded text-[10px] font-medium uppercase tracking-widest shadow-sm">
+                    Variable
+                  </span>
+                )}
+                {font.stylesList?.map((s, i) => (
+                  <span key={i} className="px-2.5 py-1 bg-white border border-[#E6E6E6] text-[#6C6C6C] rounded text-[10px] font-medium uppercase tracking-widest shadow-sm hover:text-[#252525] hover:border-[#252525]/30 cursor-default transition-colors">
+                    {s.name}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
           <div className="p-8 flex flex-col gap-8 flex-1 w-full text-left">
             <ControlSlider label="Size" value={fontSize} min={12} max={200} step={1} unit="px" onChange={setFontSize} />
-            {availableWeights && !font.variable ? (
+            
+            {useDropdown ? (
               <div className="flex flex-col gap-2 w-full text-left">
                 <div className="flex justify-between items-center text-xs font-medium text-[#6C6C6C] uppercase tracking-wider">
-                  <label>Weight</label><span>{fontWeight}</span>
+                  <label>Style</label><span>{font.stylesList[activeStyleIndex]?.name}</span>
                 </div>
                 <select 
-                  value={fontWeight} onChange={(e) => setFontWeight(Number(e.target.value))}
+                  value={activeStyleIndex} onChange={(e) => setActiveStyleIndex(Number(e.target.value))}
                   className="w-full bg-[#E6E6E6] rounded-md py-2 px-3 text-[#252525] text-sm outline-none cursor-pointer focus:ring-1 ring-[#252525]/20 transition-all appearance-none border-none text-left"
                 >
-                  {availableWeights.map(w => {
-                    const styleObj = font.stylesList?.find(s => s.weight === w && s.style === fontStyle) || font.stylesList?.find(s => s.weight === w);
-                    const displayName = styleObj ? styleObj.name : w;
-                    return <option key={w} value={w}>{displayName}</option>;
-                  })}
+                  {font.stylesList.map((styleObj, idx) => (
+                    <option key={idx} value={idx}>{styleObj.name}</option>
+                  ))}
                 </select>
               </div>
             ) : (
               <ControlSlider label="Weight" value={fontWeight} min={100} max={900} step={font.variable ? 1 : 100} onChange={setFontWeight} />
             )}
+            
             <ControlSlider label="Line Height" value={lineHeight} min={0.8} max={2.5} step={0.1} onChange={setLineHeight} />
             <ControlSlider label="Letter Spacing" value={letterSpacing} min={-0.1} max={0.5} step={0.01} unit="em" onChange={setLetterSpacing} />
             
@@ -439,7 +492,7 @@ function PlaygroundView({ font, onBack, onDelete }) {
                   ))}
                 </div>
                 <div className="flex items-center gap-1 bg-[#E6E6E6] p-1 rounded-lg w-fit">
-                  <button onClick={() => setFontStyle(fontStyle === 'italic' ? 'normal' : 'italic')} disabled={!hasItalicForCurrentWeight} className={`p-2 rounded-md transition-all ${fontStyle === 'italic' ? 'bg-white shadow-sm text-[#252525]' : 'text-[#6C6C6C] hover:text-[#252525]'} ${!hasItalicForCurrentWeight ? 'opacity-30 cursor-not-allowed' : ''}`}>
+                  <button onClick={handleItalicToggle} disabled={!hasItalicCounterpart} className={`p-2 rounded-md transition-all ${appliedFontStyle === 'italic' ? 'bg-white shadow-sm text-[#252525]' : 'text-[#6C6C6C] hover:text-[#252525]'} ${!hasItalicCounterpart ? 'opacity-30 cursor-not-allowed' : ''}`}>
                     <Italic className="w-4 h-4" />
                   </button>
                 </div>
@@ -466,7 +519,16 @@ function PlaygroundView({ font, onBack, onDelete }) {
           <textarea
             value={text} onChange={(e) => setText(e.target.value)} spellCheck="false"
             className="w-full h-full resize-none outline-none p-8 md:p-16 lg:p-24 bg-transparent transition-all duration-200"
-            style={{ fontFamily: font.cssFamily, fontSize: `${fontSize}px`, fontWeight: fontWeight, fontStyle: fontStyle, lineHeight: lineHeight, letterSpacing: `${letterSpacing}em`, textAlign: textAlign, color: textColor }}
+            style={{ 
+              fontFamily: appliedFontFamily, 
+              fontSize: `${fontSize}px`, 
+              fontWeight: appliedFontWeight, 
+              fontStyle: appliedFontStyle, 
+              lineHeight: lineHeight, 
+              letterSpacing: `${letterSpacing}em`, 
+              textAlign: textAlign, 
+              color: textColor 
+            }}
           />
         </div>
       </div>
@@ -502,14 +564,30 @@ function UploadPanel({ onClose, onSave }) {
           console.warn("Opentype parsing fell back to basic filename extraction for", file.name, parseErr);
         }
 
-        // Get True Family Name
-        let familyName = parsedFont?.names?.fontFamily?.en || parsedFont?.names?.preferredFamily?.en;
-        if (!familyName) {
-            familyName = file.name.split('.')[0].replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-        }
+        // Get Raw Family Name
+        let rawFamilyName = parsedFont?.names?.fontFamily?.en || parsedFont?.names?.preferredFamily?.en || file.name.split('.')[0];
+        
+        // Strip out width/stretch modifiers from the family name to ensure grouping
+        let familyName = rawFamilyName
+            .replace(/\b(Condensed|Cond|Extended|Ext|Wide|Narrow|Compressed|SemiCondensed|SemiCond)\b/gi, '')
+            .replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '')
+            .replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+            
+        if (!familyName) familyName = "Custom Font";
 
-        // Get True Subfamily / Style Name (e.g. "Bold", "Regular", "Medium Italic")
-        let weightName = parsedFont?.names?.fontSubfamily?.en || parsedFont?.names?.preferredSubfamily?.en || 'Regular';
+        // Get True Subfamily / Style Name (e.g. "Bold", "Regular")
+        let rawSubfamily = parsedFont?.names?.fontSubfamily?.en || parsedFont?.names?.preferredSubfamily?.en || 'Regular';
+        
+        // Recover stretch descriptors from the raw family name if they were present
+        let stretchMatch = rawFamilyName.match(/\b(Condensed|Cond|Extended|Ext|Wide|Narrow|Compressed|SemiCondensed|SemiCond)\b/i);
+        let weightName = rawSubfamily;
+        if (stretchMatch && !weightName.toLowerCase().includes(stretchMatch[0].toLowerCase())) {
+            weightName = `${stretchMatch[0]} ${weightName}`;
+        }
+        
+        // Clean up duplicate names (e.g., "Condensed Condensed Bold")
+        let styleWords = weightName.split(' ');
+        weightName = [...new Set(styleWords)].join(' ');
         
         // Extract technical numeric weight
         let weight = parsedFont?.tables?.os2?.usWeightClass || 400;
@@ -521,9 +599,11 @@ function UploadPanel({ onClose, onSave }) {
         let foundry = parsedFont?.names?.manufacturer?.en || parsedFont?.names?.designer?.en || 'Independent Foundry';
 
         const cssFamily = `Custom_${familyName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        // Create a totally unique CSS font-family for THIS specific file so browser doesn't mix them up
+        const styleCssFamily = `${cssFamily}_${weightName.replace(/[^a-zA-Z0-9]/g, '')}`;
 
         // Preview locally before upload
-        const fontFace = new FontFace(cssFamily, buffer, { weight: weight.toString(), style });
+        const fontFace = new FontFace(styleCssFamily, buffer, { weight: weight.toString(), style });
         await fontFace.load();
         document.fonts.add(fontFace);
 
@@ -545,8 +625,8 @@ function UploadPanel({ onClose, onSave }) {
         const entry = familyMap.get(familyName);
         
         // Prevent exact duplicates and add file to the stylesList for later upload mapping
-        if (!entry.stylesList.some(s => s.weight === weight && s.style === style)) {
-           entry.stylesList.push({ weight, style, name: weightName, file });
+        if (!entry.stylesList.some(s => s.name === weightName)) {
+           entry.stylesList.push({ weight, style, name: weightName, file, cssFamily: styleCssFamily });
         }
         entry.styles = entry.stylesList.length;
 
@@ -592,6 +672,7 @@ function UploadPanel({ onClose, onSave }) {
             weight: styleObj.weight,
             style: styleObj.style,
             name: styleObj.name,
+            cssFamily: styleObj.cssFamily,
             url: publicUrlData.publicUrl
           });
         }
