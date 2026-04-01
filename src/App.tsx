@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import opentype from 'https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/+esm';
 import { 
   Search, ChevronLeft, AlignLeft, AlignCenter, AlignRight, AlignJustify,
   Type, Maximize2, Minimize2, SlidersHorizontal, X, FileUp, Check, 
-  Loader2, Plus, Italic, Trash2
+  Loader2, Plus, Italic, Trash2, Download
 } from 'lucide-react';
 
 // ==========================================
@@ -306,6 +307,7 @@ function PlaygroundView({ font, onBack, onDelete }) {
   const [textColor, setTextColor] = useState('#252525');
   const [bgColor, setBgColor] = useState('#ffffff');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     if (font.stylesList && font.stylesList.length > 0) {
@@ -332,6 +334,37 @@ function PlaygroundView({ font, onBack, onDelete }) {
     if (font.stylesList && fontStyle === 'italic' && !hasItalicForCurrentWeight) setFontStyle('normal');
   }, [fontWeight, font.stylesList, hasItalicForCurrentWeight, fontStyle]);
 
+  // Handle downloading all font files associated with this font
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      const stylesToDownload = font.stylesList?.length > 0 
+        ? font.stylesList 
+        : [{ url: font.url, name: 'Regular' }];
+
+      for (const styleObj of stylesToDownload) {
+        if (!styleObj.url) continue;
+        
+        // Fetch the file as a Blob to force the browser to download instead of opening a new tab
+        const response = await fetch(styleObj.url);
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = `${font.name.replace(/\s+/g, '-')}-${styleObj.name}.ttf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch (err) {
+      console.error("Download failed", err);
+      alert("Failed to download font files.");
+    }
+    setIsDownloading(false);
+  };
+
   return (
     <div className={`flex flex-col h-screen w-full text-left animate-in slide-in-from-right-8 duration-500 ease-out ${isFullscreen ? 'fixed inset-0 z-50 bg-[#EFEFEF]' : ''}`}>
       <div className="flex-none px-6 py-4 flex items-center justify-between border-b border-[#E6E6E6] w-full text-left">
@@ -340,9 +373,22 @@ function PlaygroundView({ font, onBack, onDelete }) {
         </button>
         <div className="flex items-center justify-end gap-4">
           {font.isCustom && (
-            <button onClick={onDelete} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 transition-colors">
-              <Trash2 className="w-4 h-4" /> Delete
-            </button>
+             <>
+              <button 
+                onClick={handleDownload} 
+                disabled={isDownloading}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-[#252525] hover:bg-[#E6E6E6] transition-colors disabled:opacity-50"
+              >
+                {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} 
+                Download
+              </button>
+              <button 
+                onClick={onDelete} 
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Delete
+              </button>
+            </>
           )}
           <button onClick={() => setIsFullscreen(!isFullscreen)} className="p-2 rounded-full hover:bg-[#E6E6E6] transition-colors text-[#6C6C6C] hover:text-[#252525]">
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -370,7 +416,11 @@ function PlaygroundView({ font, onBack, onDelete }) {
                   value={fontWeight} onChange={(e) => setFontWeight(Number(e.target.value))}
                   className="w-full bg-[#E6E6E6] rounded-md py-2 px-3 text-[#252525] text-sm outline-none cursor-pointer focus:ring-1 ring-[#252525]/20 transition-all appearance-none border-none text-left"
                 >
-                  {availableWeights.map(w => <option key={w} value={w}>{w}</option>)}
+                  {availableWeights.map(w => {
+                    const styleObj = font.stylesList?.find(s => s.weight === w && s.style === fontStyle) || font.stylesList?.find(s => s.weight === w);
+                    const displayName = styleObj ? styleObj.name : w;
+                    return <option key={w} value={w}>{displayName}</option>;
+                  })}
                 </select>
               </div>
             ) : (
@@ -442,45 +492,38 @@ function UploadPanel({ onClose, onSave }) {
 
     for (const file of files) {
       try {
-        // --- SMART PARSING LOGIC ---
-        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
-        const lowerName = nameWithoutExt.toLowerCase();
+        const buffer = await file.arrayBuffer();
         
-        // 1. Detect Weight
-        let weight = 400;
-        let weightName = 'Regular';
-        if (/thin|hairline/.test(lowerName)) { weight = 100; weightName = 'Thin'; }
-        else if (/extralight|ultralight/.test(lowerName)) { weight = 200; weightName = 'ExtraLight'; }
-        else if (/light/.test(lowerName)) { weight = 300; weightName = 'Light'; }
-        else if (/medium/.test(lowerName)) { weight = 500; weightName = 'Medium'; }
-        else if (/semibold|demibold/.test(lowerName)) { weight = 600; weightName = 'SemiBold'; }
-        else if (/extrabold|ultrabold/.test(lowerName)) { weight = 800; weightName = 'ExtraBold'; }
-        else if (/bold/.test(lowerName)) { weight = 700; weightName = 'Bold'; }
-        else if (/black|heavy/.test(lowerName)) { weight = 900; weightName = 'Black'; }
-
-        // 2. Detect Style
-        const isItalic = /italic|oblique/i.test(lowerName);
-        const style = isItalic ? 'italic' : 'normal';
-        if (isItalic && weightName === 'Regular') weightName = 'Italic';
-        else if (isItalic) weightName += ' Italic';
-
-        // 3. Clean Family Name
-        let baseName = nameWithoutExt.replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '');
-        // Separate camelCase and remove dashes
-        let cleanName = baseName.replace(/[-_]/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-
-        // 4. Guess Foundry (Look for 2-4 letter prefixes like "GT", "PP")
-        let foundry = 'Independent Foundry';
-        let familyParts = cleanName.split(' ');
-        if (familyParts.length > 1 && /^[A-Z]{2,4}$/.test(familyParts[0])) {
-           foundry = familyParts[0] + ' Type'; 
+        // 1. Magical Parsing with opentype.js
+        let parsedFont = null;
+        try {
+          parsedFont = opentype.parse(buffer);
+        } catch (parseErr) {
+          console.warn("Opentype parsing fell back to basic filename extraction for", file.name, parseErr);
         }
 
-        const familyName = cleanName;
+        // Get True Family Name
+        let familyName = parsedFont?.names?.fontFamily?.en || parsedFont?.names?.preferredFamily?.en;
+        if (!familyName) {
+            familyName = file.name.split('.')[0].replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+        }
+
+        // Get True Subfamily / Style Name (e.g. "Bold", "Regular", "Medium Italic")
+        let weightName = parsedFont?.names?.fontSubfamily?.en || parsedFont?.names?.preferredSubfamily?.en || 'Regular';
+        
+        // Extract technical numeric weight
+        let weight = parsedFont?.tables?.os2?.usWeightClass || 400;
+        
+        // Extract technical italic style
+        let style = /italic|oblique/i.test(weightName) ? 'italic' : 'normal';
+
+        // Extract True Foundry
+        let foundry = parsedFont?.names?.manufacturer?.en || parsedFont?.names?.designer?.en || 'Independent Foundry';
+
         const cssFamily = `Custom_${familyName.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
         // Preview locally before upload
-        const fontFace = new FontFace(cssFamily, await file.arrayBuffer(), { weight: weight.toString(), style });
+        const fontFace = new FontFace(cssFamily, buffer, { weight: weight.toString(), style });
         await fontFace.load();
         document.fonts.add(fontFace);
 
@@ -490,7 +533,7 @@ function UploadPanel({ onClose, onSave }) {
             name: familyName, 
             foundry: foundry, 
             styles: 0, 
-            variable: /variable|var/i.test(lowerName), 
+            variable: /variable|var/i.test(file.name) || parsedFont?.tables?.fvar ? true : false, 
             category: 'sans-serif', 
             cssFamily,
             stylesList: [], 
@@ -506,14 +549,17 @@ function UploadPanel({ onClose, onSave }) {
            entry.stylesList.push({ weight, style, name: weightName, file });
         }
         entry.styles = entry.stylesList.length;
-        
-        // If any file in the family says "variable", mark the whole family as variable
-        if (/variable|var/i.test(lowerName)) entry.variable = true;
 
       } catch (err) { console.error("Error processing font", file.name, err); }
     }
     
-    setParsedFamilies(prev => [...prev, ...Array.from(familyMap.values())]);
+    // Sort weights from lightest to heaviest for display purposes
+    const finalizedFamilies = Array.from(familyMap.values()).map(f => {
+      f.stylesList.sort((a, b) => a.weight - b.weight);
+      return f;
+    });
+
+    setParsedFamilies(prev => [...prev, ...finalizedFamilies]);
     setAnalyzing(false);
   }, []);
 
@@ -613,14 +659,15 @@ function UploadPanel({ onClose, onSave }) {
           </div>
 
           {parsedFamilies.map((family, idx) => (
-            <div key={idx} className="bg-[#E6E6E6] rounded-2xl p-6 flex flex-col gap-4 text-left">
+            <div key={idx} className="bg-[#E6E6E6] rounded-2xl p-6 flex flex-col gap-4 text-left shadow-sm">
               <div className="text-3xl truncate py-2 border-b border-[#EFEFEF] text-left" style={{ fontFamily: family.cssFamily, color: '#252525', fontWeight: 400 }}>{family.name || "Preview"}</div>
               <div className="grid grid-cols-2 gap-3 text-left">
                 <div className="col-span-2"><label className="text-[10px] text-[#6C6C6C] uppercase tracking-widest mb-1 block">Family Name</label><input type="text" value={family.name} onChange={(e) => handleUpdateFamily(idx, 'name', e.target.value)} className="w-full text-sm border-none bg-[#EFEFEF] text-[#252525] rounded-md px-3 py-2 outline-none" /></div>
                 <div className="col-span-2"><label className="text-[10px] text-[#6C6C6C] uppercase tracking-widest mb-1 block">Foundry</label><input type="text" value={family.foundry} onChange={(e) => handleUpdateFamily(idx, 'foundry', e.target.value)} className="w-full text-sm border-none bg-[#EFEFEF] text-[#252525] rounded-md px-3 py-2 outline-none" /></div>
               </div>
-              <div className="mt-2 text-xs text-[#6C6C6C] font-medium uppercase tracking-wider">
-                Parsed {family.stylesList.length} {family.stylesList.length === 1 ? 'Style' : 'Styles'}
+              <div className="mt-2 text-xs text-[#6C6C6C] font-medium leading-relaxed">
+                <span className="uppercase tracking-widest opacity-80 block mb-1">Parsed {family.stylesList.length} {family.stylesList.length === 1 ? 'Style' : 'Styles'}</span>
+                {family.stylesList.map(s => s.name).join(', ')}
               </div>
             </div>
           ))}
