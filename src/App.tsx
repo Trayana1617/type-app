@@ -79,7 +79,24 @@ export default function TypographyApp() {
         
         // Inject physical font files into browser memory so they render
         formattedData.forEach(async (font) => {
-          if (font.url) {
+          if (font.stylesList && font.stylesList.length > 0) {
+            // Load EACH style and weight combination into the browser
+            font.stylesList.forEach(async (styleObj) => {
+              if (styleObj.url) {
+                try {
+                  const fontFace = new FontFace(font.cssFamily, `url(${styleObj.url})`, {
+                    weight: styleObj.weight.toString(),
+                    style: styleObj.style
+                  });
+                  await fontFace.load();
+                  document.fonts.add(fontFace);
+                } catch (err) {
+                  console.error("Failed to load custom font style:", err);
+                }
+              }
+            });
+          } else if (font.url) {
+            // Fallback for older single-file uploads
             try {
               const fontFace = new FontFace(font.cssFamily, `url(${font.url})`);
               await fontFace.load();
@@ -126,11 +143,18 @@ export default function TypographyApp() {
       const { error: dbError } = await supabase.from('custom_fonts').delete().eq('id', font.id);
       if (dbError) throw dbError;
       
-      // 2. Delete the physical file from Supabase Storage bucket
-      // We extract the filename from the URL (everything after /fonts/)
-      const fileName = font.url.split('/fonts/').pop();
-      if (fileName) {
-        const { error: storageError } = await supabase.storage.from('fonts').remove([fileName]);
+      // 2. Delete ALL physical files from Supabase Storage bucket
+      const fileNamesToDelete = [];
+      if (font.stylesList) {
+        font.stylesList.forEach(s => {
+          if (s.url) fileNamesToDelete.push(s.url.split('/fonts/').pop());
+        });
+      } else if (font.url) {
+        fileNamesToDelete.push(font.url.split('/fonts/').pop());
+      }
+
+      if (fileNamesToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage.from('fonts').remove(fileNamesToDelete);
         if (storageError) throw storageError;
       }
 
@@ -145,6 +169,14 @@ export default function TypographyApp() {
 
   return (
     <div className="min-h-screen w-full bg-[#EFEFEF] text-[#252525] font-sans selection:bg-[#252525] selection:text-[#EFEFEF] text-left">
+      {/* This style block overrides the default Vite/StackBlitz index.css 
+        to ensure the app stretches fully edge-to-edge.
+      */}
+      <style dangerouslySetInnerHTML={{__html: `
+        #root { max-width: none !important; padding: 0 !important; margin: 0 !important; width: 100vw; overflow-x: hidden; }
+        body { margin: 0 !important; padding: 0 !important; background-color: #EFEFEF; }
+      `}} />
+      
       {selectedFont ? (
         <PlaygroundView 
           font={selectedFont} 
@@ -410,53 +442,115 @@ function UploadPanel({ onClose, onSave }) {
 
     for (const file of files) {
       try {
-        let baseName = file.name.split('.')[0].replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '');
-        let familyName = baseName.replace(/([a-z])([A-Z])/g, '$1 $2').trim() || baseName;
+        // --- SMART PARSING LOGIC ---
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
+        const lowerName = nameWithoutExt.toLowerCase();
+        
+        // 1. Detect Weight
+        let weight = 400;
+        let weightName = 'Regular';
+        if (/thin|hairline/.test(lowerName)) { weight = 100; weightName = 'Thin'; }
+        else if (/extralight|ultralight/.test(lowerName)) { weight = 200; weightName = 'ExtraLight'; }
+        else if (/light/.test(lowerName)) { weight = 300; weightName = 'Light'; }
+        else if (/medium/.test(lowerName)) { weight = 500; weightName = 'Medium'; }
+        else if (/semibold|demibold/.test(lowerName)) { weight = 600; weightName = 'SemiBold'; }
+        else if (/extrabold|ultrabold/.test(lowerName)) { weight = 800; weightName = 'ExtraBold'; }
+        else if (/bold/.test(lowerName)) { weight = 700; weightName = 'Bold'; }
+        else if (/black|heavy/.test(lowerName)) { weight = 900; weightName = 'Black'; }
+
+        // 2. Detect Style
+        const isItalic = /italic|oblique/i.test(lowerName);
+        const style = isItalic ? 'italic' : 'normal';
+        if (isItalic && weightName === 'Regular') weightName = 'Italic';
+        else if (isItalic) weightName += ' Italic';
+
+        // 3. Clean Family Name
+        let baseName = nameWithoutExt.replace(/[-_\s]?(Thin|Hairline|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy|Italic|Oblique).*$/i, '');
+        // Separate camelCase and remove dashes
+        let cleanName = baseName.replace(/[-_]/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+
+        // 4. Guess Foundry (Look for 2-4 letter prefixes like "GT", "PP")
+        let foundry = 'Independent Foundry';
+        let familyParts = cleanName.split(' ');
+        if (familyParts.length > 1 && /^[A-Z]{2,4}$/.test(familyParts[0])) {
+           foundry = familyParts[0] + ' Type'; 
+        }
+
+        const familyName = cleanName;
         const cssFamily = `Custom_${familyName.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
         // Preview locally before upload
-        const fontFace = new FontFace(cssFamily, await file.arrayBuffer());
+        const fontFace = new FontFace(cssFamily, await file.arrayBuffer(), { weight: weight.toString(), style });
         await fontFace.load();
         document.fonts.add(fontFace);
 
         if (!familyMap.has(familyName)) {
           familyMap.set(familyName, {
             id: `custom-${cssFamily.toLowerCase()}-${Date.now()}`,
-            name: familyName, foundry: 'Unknown Foundry', styles: 0, variable: false, category: 'sans-serif', cssFamily,
-            files: [], stylesList: [], createdAt: Date.now(), isCustom: true
+            name: familyName, 
+            foundry: foundry, 
+            styles: 0, 
+            variable: /variable|var/i.test(lowerName), 
+            category: 'sans-serif', 
+            cssFamily,
+            stylesList: [], 
+            createdAt: Date.now(), 
+            isCustom: true
           });
         }
+        
         const entry = familyMap.get(familyName);
-        entry.stylesList.push({ weight: 400, style: 'normal', name: 'Regular' }); // Simplified parsing for brevity
+        
+        // Prevent exact duplicates and add file to the stylesList for later upload mapping
+        if (!entry.stylesList.some(s => s.weight === weight && s.style === style)) {
+           entry.stylesList.push({ weight, style, name: weightName, file });
+        }
         entry.styles = entry.stylesList.length;
-        entry.files.push(file);
+        
+        // If any file in the family says "variable", mark the whole family as variable
+        if (/variable|var/i.test(lowerName)) entry.variable = true;
+
       } catch (err) { console.error("Error processing font", file.name, err); }
     }
+    
     setParsedFamilies(prev => [...prev, ...Array.from(familyMap.values())]);
     setAnalyzing(false);
   }, []);
 
-  // --- SUPABASE UPLOAD LOGIC ---
+  // --- SUPABASE MULTI-FILE UPLOAD LOGIC ---
   const handleIntegrate = async () => {
     setIsUploading(true);
     try {
       const finalFamilies = [];
       
       for (const family of parsedFamilies) {
-        // 1. Upload the physical file to Supabase Storage Bucket ("fonts")
-        const mainFile = family.files[0];
-        const fileName = `${Date.now()}-${mainFile.name.replace(/\s+/g, '-')}`;
         
-        const { data: storageData, error: storageError } = await supabase.storage
-          .from('fonts')
-          .upload(fileName, mainFile, { cacheControl: '3600', upsert: false });
-
-        if (storageError) throw storageError;
-
-        // Get the public URL so the browser can download it
-        const { data: publicUrlData } = supabase.storage.from('fonts').getPublicUrl(fileName);
+        const updatedStylesList = [];
         
-        // 2. Prepare database entry (strip raw files out)
+        // 1. Upload EVERY file/style in the family to Supabase Storage
+        for (const styleObj of family.stylesList) {
+          const file = styleObj.file;
+          if (!file) continue;
+
+          const fileName = `${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
+          const { error: storageError } = await supabase.storage
+            .from('fonts')
+            .upload(fileName, file, { cacheControl: '3600', upsert: false });
+
+          if (storageError) throw storageError;
+
+          // Get the public URL for this specific weight
+          const { data: publicUrlData } = supabase.storage.from('fonts').getPublicUrl(fileName);
+          
+          updatedStylesList.push({
+            weight: styleObj.weight,
+            style: styleObj.style,
+            name: styleObj.name,
+            url: publicUrlData.publicUrl
+          });
+        }
+
+        // 2. Prepare database entry (store all the URLs directly inside stylesList)
         const familyToSave = { 
           id: family.id,
           name: family.name,
@@ -465,8 +559,8 @@ function UploadPanel({ onClose, onSave }) {
           variable: family.variable,
           category: family.category,
           cssFamily: family.cssFamily,
-          url: publicUrlData.publicUrl,
-          stylesList: family.stylesList, // JSONB
+          url: updatedStylesList[0]?.url, // Keep one main URL as fallback
+          stylesList: updatedStylesList, // Now contains URLs for every weight!
           createdAt: family.createdAt
         };
 
@@ -520,10 +614,13 @@ function UploadPanel({ onClose, onSave }) {
 
           {parsedFamilies.map((family, idx) => (
             <div key={idx} className="bg-[#E6E6E6] rounded-2xl p-6 flex flex-col gap-4 text-left">
-              <div className="text-3xl truncate py-2 border-b border-[#EFEFEF] text-left" style={{ fontFamily: family.cssFamily, color: '#252525' }}>{family.name || "Preview"}</div>
+              <div className="text-3xl truncate py-2 border-b border-[#EFEFEF] text-left" style={{ fontFamily: family.cssFamily, color: '#252525', fontWeight: 400 }}>{family.name || "Preview"}</div>
               <div className="grid grid-cols-2 gap-3 text-left">
                 <div className="col-span-2"><label className="text-[10px] text-[#6C6C6C] uppercase tracking-widest mb-1 block">Family Name</label><input type="text" value={family.name} onChange={(e) => handleUpdateFamily(idx, 'name', e.target.value)} className="w-full text-sm border-none bg-[#EFEFEF] text-[#252525] rounded-md px-3 py-2 outline-none" /></div>
                 <div className="col-span-2"><label className="text-[10px] text-[#6C6C6C] uppercase tracking-widest mb-1 block">Foundry</label><input type="text" value={family.foundry} onChange={(e) => handleUpdateFamily(idx, 'foundry', e.target.value)} className="w-full text-sm border-none bg-[#EFEFEF] text-[#252525] rounded-md px-3 py-2 outline-none" /></div>
+              </div>
+              <div className="mt-2 text-xs text-[#6C6C6C] font-medium uppercase tracking-wider">
+                Parsed {family.stylesList.length} {family.stylesList.length === 1 ? 'Style' : 'Styles'}
               </div>
             </div>
           ))}
