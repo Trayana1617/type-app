@@ -123,13 +123,15 @@ export default function TypographyApp() {
 
     try {
       // 1. Delete from Supabase Database
-      await supabase.from('custom_fonts').delete().eq('id', font.id);
+      const { error: dbError } = await supabase.from('custom_fonts').delete().eq('id', font.id);
+      if (dbError) throw dbError;
       
       // 2. Delete the physical file from Supabase Storage bucket
       // We extract the filename from the URL (everything after /fonts/)
       const fileName = font.url.split('/fonts/').pop();
       if (fileName) {
-        await supabase.storage.from('fonts').remove([fileName]);
+        const { error: storageError } = await supabase.storage.from('fonts').remove([fileName]);
+        if (storageError) throw storageError;
       }
 
       // 3. Remove from UI
@@ -137,7 +139,7 @@ export default function TypographyApp() {
       setSelectedFont(null);
     } catch (error) {
       console.error("Failed to delete font:", error);
-      alert("Failed to delete font. Check console for details.");
+      alert(`Delete failed: ${error.message || "Please check the console for details."}`);
     }
   };
 
@@ -478,7 +480,7 @@ function UploadPanel({ onClose, onSave }) {
       onSave(finalFamilies);
     } catch (error) {
       console.error("Supabase Upload failed:", error);
-      alert("Failed to upload to Supabase. Make sure your bucket is public and tables exist!");
+      alert(`Upload failed: ${error.message || "Please check the console for details."}`);
     }
     setIsUploading(false);
   };
